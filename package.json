@@ -1,10 +1,10 @@
 {
-  "name": "asam-osi-converter",
-  "displayName": "ASAM OSI Converter",
-  "description": "Visualises data following the standard of the ASAM Open Simulation Interface (ASAM OSI) using the native 3D panel of Lichtblick",
+  "name": "asam-avx-osi-converter",
+  "displayName": "ASAM AVX OSI Converter",
+  "description": "Visualises data following the standard and Ansys-AVX of the ASAM Open Simulation Interface (ASAM OSI) using the native 3D panel of Lichtblick",
   "publisher": "Lichtblick",
   "homepage": "https://www.asam.net/standards/detail/osi/",
-  "version": "0.0.1",
+  "version": "0.0.1-avx",
   "license": "MIT",
   "main": "./dist/extension.js",
   "keywords": [

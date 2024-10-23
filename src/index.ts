@@ -518,4 +518,36 @@ export function activate(extensionContext: ExtensionContext): void {
     converter: (message: SensorView) =>
       convertGrountTruthToFrameTransform(message.global_ground_truth!),
   });
+
+  extensionContext.registerMessageConverter({
+    fromSchemaName: "avx_osi3.GroundTruth",
+    toSchemaName: "foxglove.SceneUpdate",
+    converter: convertGrountTruthToSceneUpdate,
+  });
+
+  extensionContext.registerMessageConverter({
+    fromSchemaName: "avx_osi3.SensorView",
+    toSchemaName: "foxglove.SceneUpdate",
+    converter: (osiSensorView: SensorView) =>
+      convertGrountTruthToSceneUpdate(osiSensorView.global_ground_truth!),
+  });
+
+  extensionContext.registerMessageConverter({
+    fromSchemaName: "avx_osi3.SensorData",
+    toSchemaName: "foxglove.SceneUpdate",
+    converter: convertSensorDataToSceneUpdate,
+  });
+
+  extensionContext.registerMessageConverter({
+    fromSchemaName: "avx_osi3.GroundTruth",
+    toSchemaName: "foxglove.FrameTransform",
+    converter: convertGrountTruthToFrameTransform,
+  });
+
+  extensionContext.registerMessageConverter({
+    fromSchemaName: "avx_osi3.SensorView",
+    toSchemaName: "foxglove.FrameTransform",
+    converter: (message: SensorView) =>
+      convertGrountTruthToFrameTransform(message.global_ground_truth!),
+  });
 }
