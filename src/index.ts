@@ -36,6 +36,8 @@ import {
   RoadMarking_Classification_Type,
   RoadMarking_Classification_Color,
   TrafficSign_MainSign_Classification_Type,
+  MotionRequest,
+  StatePoint,
 } from "@lichtblick/asam-osi-types";
 import { ExtensionContext, Immutable, MessageEvent, PanelSettings } from "@lichtblick/suite";
 import { eulerToQuaternion, quaternionMultiplication } from "@utils/geometry";
@@ -774,6 +776,106 @@ function buildSensorDataSceneEntities(
 }
 
 /**
+ * Builds scene entities for MotionRequest, visualizing the desired trajectory
+ * as connected points in 3D space relative to the ego vehicle frame.
+ *
+ * @param osiMotionRequest - The OSI MotionRequest object containing trajectory data
+ * @returns An array of PartialSceneEntity objects representing the trajectory
+ */
+function buildMotionRequestSceneEntities(
+  osiMotionRequest: DeepRequired<MotionRequest>,
+): PartialSceneEntity[] {
+  const time: Time = osiTimestampToTime(osiMotionRequest.timestamp);
+
+  // Helper function to convert StatePoint to Point3
+  const statePointToPoint3 = (statePoint: DeepRequired<StatePoint>): Point3 => {
+    return {
+      x: statePoint.position.x,
+      y: statePoint.position.y,
+      z: statePoint.position.z,
+    };
+  };
+
+  // Helper function to create a line primitive from trajectory points
+  const createTrajectoryLine = (
+    trajectoryPoints: DeepRequired<StatePoint>[],
+    color: Color,
+    thickness: number,
+  ): DeepPartial<LinePrimitive> => {
+    const points = trajectoryPoints.map(statePointToPoint3);
+    return {
+      type: LineType.LINE_STRIP,
+      pose: {
+        position: { x: 0, y: 0, z: 0 },
+        orientation: { x: 0, y: 0, z: 0, w: 1 },
+      },
+      thickness,
+      scale_invariant: false,
+      points,
+      color,
+      indices: [],
+    };
+  };
+
+  // Helper function to create sphere markers at trajectory points
+  const createTrajectoryPoints = (
+    trajectoryPoints: DeepRequired<StatePoint>[],
+    color: Color,
+    radius: number,
+  ): CubePrimitive[] => {
+    return trajectoryPoints.map((point) => ({
+      pose: {
+        position: {
+          x: point.position.x,
+          y: point.position.y,
+          z: point.position.z,
+        },
+        orientation: { x: 0, y: 0, z: 0, w: 1 },
+      },
+      size: { x: radius, y: radius, z: radius },
+      color,
+    }));
+  };
+
+  const sceneEntities: PartialSceneEntity[] = [];
+
+  // Visualize DesiredTrajectory if available
+  if (
+    osiMotionRequest.desired_trajectory &&
+    osiMotionRequest.desired_trajectory.trajectory_point &&
+    osiMotionRequest.desired_trajectory.trajectory_point.length > 0
+  ) {
+    const trajectoryPoints = osiMotionRequest.desired_trajectory.trajectory_point;
+
+    // Create line connecting trajectory points (cyan/blue color for desired trajectory)
+    const trajectoryLine = createTrajectoryLine(
+      trajectoryPoints,
+      ColorCode("cyan", 0.8),
+      0.1,
+    );
+
+    // Create small spheres at each trajectory point
+    const trajectoryMarkers = createTrajectoryPoints(
+      trajectoryPoints,
+      ColorCode("cyan", 1.0),
+      0.15,
+    );
+
+    sceneEntities.push({
+      timestamp: time,
+      frame_id: "ego_vehicle_bb_center",
+      id: "motion_request_desired_trajectory",
+      lifetime: { sec: 0, nsec: 0 },
+      frame_locked: true,
+      lines: [trajectoryLine],
+      cubes: trajectoryMarkers,
+    });
+  }
+
+  return sceneEntities;
+}
+
+/**
  * Hashing function to create a unique hash for lane objects.
  *
  * The hashLanes function creates a hash by:
@@ -1070,6 +1172,27 @@ export function activate(extensionContext: ExtensionContext): void {
     };
   };
 
+  const convertMotionRequestToSceneUpdate = (
+    osiMotionRequest: MotionRequest,
+  ): DeepPartial<SceneUpdate> => {
+    let sceneEntities: PartialSceneEntity[] = [];
+
+    try {
+      sceneEntities = buildMotionRequestSceneEntities(
+        osiMotionRequest as DeepRequired<MotionRequest>,
+      );
+    } catch (error) {
+      console.error(
+        "OsiMotionRequestVisualizer: Error during message conversion:\n%s\nSkipping message! (Input message not compatible?)",
+        error,
+      );
+    }
+    return {
+      deletions: [],
+      entities: sceneEntities,
+    };
+  };
+
   const convertGroundTruthToFrameTransforms = (message: GroundTruth): FrameTransforms => {
     const transforms = { transforms: [] } as FrameTransforms;
 
@@ -1220,6 +1343,12 @@ export function activate(extensionContext: ExtensionContext): void {
     fromSchemaName: "osi3.SensorData",
     toSchemaName: "foxglove.SceneUpdate",
     converter: convertSensorDataToSceneUpdate,
+  });
+
+  extensionContext.registerMessageConverter({
+    fromSchemaName: "osi3.MotionRequest",
+    toSchemaName: "foxglove.SceneUpdate",
+    converter: convertMotionRequestToSceneUpdate,
   });
 
   extensionContext.registerMessageConverter({
