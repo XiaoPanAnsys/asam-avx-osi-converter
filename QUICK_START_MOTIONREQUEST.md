@@ -9,7 +9,7 @@
 ### 🎯 DesiredTrajectory Visualization
 - **Connected Line Path**: Cyan colored line connecting all trajectory waypoints
 - **Waypoint Markers**: Cyan spheres (15cm radius) at each trajectory point
-- **Reference Frame**: Ego vehicle bounding box center (`ego_vehicle_bb_center`)
+- **Reference Frame**: Global frame (`<root>`), same as all OSI GroundTruth objects
 
 ### Visual Appearance
 ```
@@ -74,7 +74,7 @@ ColorCode("cyan", 1.0),   // Color and opacity
 0.15,                     // Sphere radius (meters)
 
 // Reference frame (line 866)
-frame_id: "ego_vehicle_bb_center",  // or "ego_vehicle_rear_axle"
+frame_id: ROOT_FRAME,  // Global frame "<root>", same as all OSI objects
 ```
 
 ## Building and Installing
@@ -108,8 +108,8 @@ yarn package
 - ✅ Check console for errors (`OsiMotionRequestVisualizer: Error...`)
 
 ### Wrong position/orientation?
-- The trajectory is in `ego_vehicle_bb_center` frame
-- Make sure GroundTruth messages are also loaded for ego vehicle frame
+- The trajectory is in global `<root>` frame (same as all OSI GroundTruth objects)
+- Trajectory coordinates are in the same global coordinate system as moving objects
 
 ### Colors not visible?
 - Cyan color: RGB(0, 255, 255)

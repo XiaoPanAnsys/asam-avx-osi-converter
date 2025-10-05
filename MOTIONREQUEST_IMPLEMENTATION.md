@@ -44,7 +44,7 @@ extensionContext.registerMessageConverter({
 ### What Gets Visualized
 - **Trajectory Line**: Cyan colored line (80% opacity, 0.1m thickness) connecting trajectory points
 - **Trajectory Points**: Cyan colored spheres (100% opacity, 0.15m radius) marking each waypoint
-- **Reference Frame**: `ego_vehicle_bb_center` (ego vehicle bounding box center)
+- **Reference Frame**: `<root>` (global frame, same as all OSI GroundTruth objects)
 
 ### Data Source
 - Field: `MotionRequest.desired_trajectory.trajectory_point`
@@ -64,7 +64,7 @@ extensionContext.registerMessageConverter({
 ## Technical Notes
 
 - The visualization uses `LINE_STRIP` primitive for efficient rendering
-- Trajectory is frame-locked to maintain correct position relative to ego vehicle
+- Trajectory is in global frame (ROOT_FRAME), same coordinate system as all OSI GroundTruth objects
 - Empty or missing trajectory_point arrays are handled gracefully (no visualization)
 - Frame reference is consistent with other OSI visualizations in the extension
 

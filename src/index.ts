@@ -863,7 +863,7 @@ function buildMotionRequestSceneEntities(
 
     sceneEntities.push({
       timestamp: time,
-      frame_id: "ego_vehicle_bb_center",
+      frame_id: ROOT_FRAME,
       id: "motion_request_desired_trajectory",
       lifetime: { sec: 0, nsec: 0 },
       frame_locked: true,
