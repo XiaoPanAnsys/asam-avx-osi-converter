@@ -98,6 +98,7 @@ type Config = {
   showBoundingBox: boolean;
   show3dModels: boolean;
   defaultModelPath: string;
+  trajectoryPointSize: number;
 };
 
 function createModelPrimitive(
@@ -765,8 +766,8 @@ function buildSensorDataSceneEntities(
 
   const road_output_scene_update: PartialSceneEntity = {
     timestamp: { sec: osiSensorData.timestamp.seconds, nsec: osiSensorData.timestamp.nanos },
-    frame_id: "ego_vehicle_rear_axis",
-    id: "ra_ground_truth",
+    frame_id: ROOT_FRAME,
+    id: "sensor_data_lane_boundaries",
     lifetime: { sec: 0, nsec: 0 },
     frame_locked: true,
     lines: makePrimitiveLines(osiSensorData.lane_boundary, 1.0),
@@ -780,10 +781,12 @@ function buildSensorDataSceneEntities(
  * as connected points in 3D space relative to the ego vehicle frame.
  *
  * @param osiMotionRequest - The OSI MotionRequest object containing trajectory data
+ * @param config - Configuration options for visualization
  * @returns An array of PartialSceneEntity objects representing the trajectory
  */
 function buildMotionRequestSceneEntities(
   osiMotionRequest: DeepRequired<MotionRequest>,
+  config: Config | undefined,
 ): PartialSceneEntity[] {
   const time: Time = osiTimestampToTime(osiMotionRequest.timestamp);
 
@@ -837,6 +840,43 @@ function buildMotionRequestSceneEntities(
     }));
   };
 
+  // Helper function to create orientation arrows at trajectory points
+  const createTrajectoryOrientationArrows = (
+    trajectoryPoints: DeepRequired<StatePoint>[],
+    color: Color,
+  ) => {
+    const ARROW_SCALE = 1.5;
+    const SHAFT_LENGTH = 0.3 * ARROW_SCALE;
+    const SHAFT_DIAMETER = 0.03 * ARROW_SCALE;
+    const HEAD_LENGTH = 0.1 * ARROW_SCALE;
+    const HEAD_DIAMETER = 0.08 * ARROW_SCALE;
+
+    return trajectoryPoints.map((point) => {
+      // Use orientation from StatePoint if available
+      const orientation = eulerToQuaternion(
+        point.orientation?.roll ?? 0,
+        point.orientation?.pitch ?? 0,
+        point.orientation?.yaw ?? 0,
+      );
+
+      return {
+        pose: {
+          position: {
+            x: point.position.x,
+            y: point.position.y,
+            z: point.position.z + 0.1, // Slightly above ground for visibility
+          },
+          orientation,
+        },
+        shaft_length: SHAFT_LENGTH,
+        shaft_diameter: SHAFT_DIAMETER,
+        head_length: HEAD_LENGTH,
+        head_diameter: HEAD_DIAMETER,
+        color,
+      };
+    });
+  };
+
   const sceneEntities: PartialSceneEntity[] = [];
 
   // Visualize DesiredTrajectory if available
@@ -855,20 +895,28 @@ function buildMotionRequestSceneEntities(
     );
 
     // Create small spheres at each trajectory point
+    const pointSize = config?.trajectoryPointSize ?? 0.15; // Use config or default to 0.15m
     const trajectoryMarkers = createTrajectoryPoints(
       trajectoryPoints,
       ColorCode("cyan", 1.0),
-      0.15,
+      pointSize,
+    );
+
+    // Create orientation arrows at each trajectory point
+    const trajectoryOrientationArrows = createTrajectoryOrientationArrows(
+      trajectoryPoints,
+      ColorCode("yellow", 0.9), // Yellow arrows for visibility
     );
 
     sceneEntities.push({
       timestamp: time,
       frame_id: ROOT_FRAME,
       id: "motion_request_desired_trajectory",
-      lifetime: { sec: 0, nsec: 0 },
+      lifetime: { sec: 0, nsec: 100_000_000 }, // 0.1 seconds - smooth transition
       frame_locked: true,
       lines: [trajectoryLine],
       cubes: trajectoryMarkers,
+      arrows: trajectoryOrientationArrows,
     });
   }
 
@@ -1174,12 +1222,15 @@ export function activate(extensionContext: ExtensionContext): void {
 
   const convertMotionRequestToSceneUpdate = (
     osiMotionRequest: MotionRequest,
+    event?: Immutable<MessageEvent<MotionRequest>>,
   ): DeepPartial<SceneUpdate> => {
     let sceneEntities: PartialSceneEntity[] = [];
+    const config = event?.topicConfig as Config | undefined;
 
     try {
       sceneEntities = buildMotionRequestSceneEntities(
         osiMotionRequest as DeepRequired<MotionRequest>,
+        config,
       );
     } catch (error) {
       console.error(
@@ -1327,6 +1378,7 @@ export function activate(extensionContext: ExtensionContext): void {
           showBoundingBox: true,
           show3dModels: false,
           defaultModelPath: "/opt/models/vehicles/",
+          trajectoryPointSize: 0.15,
         },
       }),
     },
@@ -1414,6 +1466,7 @@ export function activate(extensionContext: ExtensionContext): void {
           showBoundingBox: true,
           show3dModels: false,
           defaultModelPath: "/opt/models/vehicles/",
+          trajectoryPointSize: 0.15,
         },
       }),
     },
@@ -1429,6 +1482,41 @@ export function activate(extensionContext: ExtensionContext): void {
     fromSchemaName: "osi3.MotionRequest",
     toSchemaName: "foxglove.SceneUpdate",
     converter: convertMotionRequestToSceneUpdate,
+    panelSettings: {
+      "3D": generatePanelSettings({
+        settings: (config) => ({
+          fields: {
+            trajectoryPointSize: {
+              label: "Trajectory Point Size (meters)",
+              input: "number",
+              value: config?.trajectoryPointSize ?? 0.15,
+              min: 0.05,
+              max: 2.0,
+              step: 0.05,
+              help: "Size of the spheres marking trajectory waypoints",
+            },
+          },
+        }),
+        handler: (action, config: Config | undefined) => {
+          if (config == undefined) {
+            return;
+          }
+          if (action.action === "update" && action.payload.path[2] === "trajectoryPointSize") {
+            config.trajectoryPointSize = action.payload.value as number;
+          }
+        },
+        defaultConfig: {
+          caching: true,
+          showAxes: true,
+          showPhysicalLanes: true,
+          showLogicalLanes: false,
+          showBoundingBox: true,
+          show3dModels: false,
+          defaultModelPath: "/opt/models/vehicles/",
+          trajectoryPointSize: 0.15,
+        },
+      }),
+    },
   });
 
   extensionContext.registerMessageConverter({
