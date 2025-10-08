@@ -8,13 +8,13 @@
 
 ### 🎯 DesiredTrajectory Visualization
 - **Connected Line Path**: Cyan colored line connecting all trajectory waypoints
-- **Waypoint Markers**: Cyan spheres (15cm radius) at each trajectory point
+- **Waypoint Markers**: Cyan circular markers (adjustable size, default 15cm) at each trajectory point
 - **Reference Frame**: Global frame (`<root>`), same as all OSI GroundTruth objects
 
 ### Visual Appearance
 ```
-     ○ ─── ○ ─── ○ ─── ○ ─── ○
-    (cyan spheres connected by cyan line)
+     ● ─── ● ─── ● ─── ● ─── ●
+    (cyan circles/spheres connected by cyan line)
 ```
 
 ## How to Use

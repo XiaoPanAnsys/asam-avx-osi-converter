@@ -40,8 +40,8 @@ The size of trajectory waypoint markers (spheres) is now **fully adjustable** th
 
 ```
 Size 0.05m:  •───•───•───•    (Subtle, precise)
-Size 0.15m:  ○───○───○───○    (Default, balanced)
-Size 0.30m:  ◯───◯───◯───◯    (Large, visible)
+Size 0.15m:  ●───●───●───●    (Default, balanced)
+Size 0.30m:  ⬤───⬤───⬤───⬤    (Large, visible)
 Size 0.50m:  ⬤───⬤───⬤───⬤    (Very large)
 ```
 

@@ -4,6 +4,7 @@ import {
   ModelPrimitive,
   SceneEntityDeletionType,
   SceneUpdate,
+  SpherePrimitive,
   TextPrimitive,
   Vector3,
   type Color,
@@ -825,7 +826,7 @@ function buildMotionRequestSceneEntities(
     trajectoryPoints: DeepRequired<StatePoint>[],
     color: Color,
     radius: number,
-  ): CubePrimitive[] => {
+  ): SpherePrimitive[] => {
     return trajectoryPoints.map((point) => ({
       pose: {
         position: {
@@ -835,46 +836,9 @@ function buildMotionRequestSceneEntities(
         },
         orientation: { x: 0, y: 0, z: 0, w: 1 },
       },
-      size: { x: radius, y: radius, z: radius },
+      size: { x: radius * 2, y: radius * 2, z: radius * 2 }, // Diameter for spheres
       color,
     }));
-  };
-
-  // Helper function to create orientation arrows at trajectory points
-  const createTrajectoryOrientationArrows = (
-    trajectoryPoints: DeepRequired<StatePoint>[],
-    color: Color,
-  ) => {
-    const ARROW_SCALE = 1.5;
-    const SHAFT_LENGTH = 0.3 * ARROW_SCALE;
-    const SHAFT_DIAMETER = 0.03 * ARROW_SCALE;
-    const HEAD_LENGTH = 0.1 * ARROW_SCALE;
-    const HEAD_DIAMETER = 0.08 * ARROW_SCALE;
-
-    return trajectoryPoints.map((point) => {
-      // Use orientation from StatePoint if available
-      const orientation = eulerToQuaternion(
-        point.orientation?.roll ?? 0,
-        point.orientation?.pitch ?? 0,
-        point.orientation?.yaw ?? 0,
-      );
-
-      return {
-        pose: {
-          position: {
-            x: point.position.x,
-            y: point.position.y,
-            z: point.position.z + 0.1, // Slightly above ground for visibility
-          },
-          orientation,
-        },
-        shaft_length: SHAFT_LENGTH,
-        shaft_diameter: SHAFT_DIAMETER,
-        head_length: HEAD_LENGTH,
-        head_diameter: HEAD_DIAMETER,
-        color,
-      };
-    });
   };
 
   const sceneEntities: PartialSceneEntity[] = [];
@@ -902,12 +866,6 @@ function buildMotionRequestSceneEntities(
       pointSize,
     );
 
-    // Create orientation arrows at each trajectory point
-    const trajectoryOrientationArrows = createTrajectoryOrientationArrows(
-      trajectoryPoints,
-      ColorCode("yellow", 0.9), // Yellow arrows for visibility
-    );
-
     sceneEntities.push({
       timestamp: time,
       frame_id: ROOT_FRAME,
@@ -915,8 +873,7 @@ function buildMotionRequestSceneEntities(
       lifetime: { sec: 0, nsec: 100_000_000 }, // 0.1 seconds - smooth transition
       frame_locked: true,
       lines: [trajectoryLine],
-      cubes: trajectoryMarkers,
-      arrows: trajectoryOrientationArrows,
+      spheres: trajectoryMarkers,
     });
   }
 

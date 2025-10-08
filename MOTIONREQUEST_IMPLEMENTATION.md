@@ -43,7 +43,7 @@ extensionContext.registerMessageConverter({
 
 ### What Gets Visualized
 - **Trajectory Line**: Cyan colored line (80% opacity, 0.1m thickness) connecting trajectory points
-- **Trajectory Points**: Cyan colored spheres (100% opacity, 0.15m radius) marking each waypoint
+- **Trajectory Points**: Cyan colored circular markers (100% opacity, adjustable size) at each waypoint
 - **Reference Frame**: `<root>` (global frame, same as all OSI GroundTruth objects)
 
 ### Data Source
