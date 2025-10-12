@@ -4,6 +4,7 @@ import {
   ModelPrimitive,
   SceneEntityDeletionType,
   SceneUpdate,
+  SpherePrimitive,
   TextPrimitive,
   Vector3,
   type Color,
@@ -19,11 +20,13 @@ import {
   GroundTruth,
   LaneBoundary,
   LaneBoundary_BoundaryPoint,
+  MotionRequest,
   MovingObject,
   MovingObject_Type,
   MovingObject_VehicleClassification_Type,
   SensorData,
   SensorView,
+  StatePoint,
   StationaryObject,
   Timestamp,
   TrafficLight,
@@ -99,6 +102,7 @@ type Config = {
   showBoundingBox: boolean;
   show3dModels: boolean;
   defaultModelPath: string;
+  trajectoryPointSize: number;
 };
 
 function createModelPrimitive(
@@ -781,6 +785,109 @@ function buildSensorDataSceneEntities(
 }
 
 /**
+ * Builds scene entities for MotionRequest, visualizing the desired trajectory
+ * as connected points in 3D space in the global frame.
+ *
+ * @param osiMotionRequest - The OSI MotionRequest object containing trajectory data
+ * @param config - Configuration options for visualization
+ * @returns An array of PartialSceneEntity objects representing the trajectory
+ */
+function buildMotionRequestSceneEntities(
+  osiMotionRequest: DeepRequired<MotionRequest>,
+  config: Config | undefined,
+): PartialSceneEntity[] {
+  const time: Time = osiTimestampToTime(osiMotionRequest.timestamp);
+
+  // Helper function to convert StatePoint to Point3
+  const statePointToPoint3 = (statePoint: DeepRequired<StatePoint>): Point3 => {
+    return {
+      x: statePoint.position.x,
+      y: statePoint.position.y,
+      z: statePoint.position.z,
+    };
+  };
+
+  // Helper function to create a line primitive from trajectory points
+  const createTrajectoryLine = (
+    trajectoryPoints: DeepRequired<StatePoint>[],
+    color: Color,
+    thickness: number,
+  ): DeepPartial<LinePrimitive> => {
+    const points = trajectoryPoints.map(statePointToPoint3);
+    return {
+      type: LineType.LINE_STRIP,
+      pose: {
+        position: { x: 0, y: 0, z: 0 },
+        orientation: { x: 0, y: 0, z: 0, w: 1 },
+      },
+      thickness,
+      scale_invariant: false,
+      points,
+      color,
+      indices: [],
+    };
+  };
+
+  // Helper function to create sphere markers at trajectory points
+  const createTrajectoryPoints = (
+    trajectoryPoints: DeepRequired<StatePoint>[],
+    color: Color,
+    radius: number,
+  ): SpherePrimitive[] => {
+    return trajectoryPoints.map((point) => ({
+      pose: {
+        position: {
+          x: point.position.x,
+          y: point.position.y,
+          z: point.position.z,
+        },
+        orientation: { x: 0, y: 0, z: 0, w: 1 },
+      },
+      size: { x: radius * 2, y: radius * 2, z: radius * 2 }, // Diameter for spheres
+      color,
+    }));
+  };
+
+  const sceneEntities: PartialSceneEntity[] = [];
+
+  // Visualize DesiredTrajectory if available
+  if (
+    osiMotionRequest.desired_trajectory &&
+    osiMotionRequest.desired_trajectory.trajectory_point &&
+    osiMotionRequest.desired_trajectory.trajectory_point.length > 0
+  ) {
+    const trajectoryPoints = osiMotionRequest.desired_trajectory.trajectory_point;
+
+    // Create line connecting trajectory points (cyan color for desired trajectory)
+    const trajectoryLine = createTrajectoryLine(
+      trajectoryPoints,
+      ColorCode("cyan", 1.0),
+      0.1,
+    );
+
+    // Create spheres at each trajectory point
+    const pointSize = config?.trajectoryPointSize ?? 0.15; // Use config or default to 0.15m
+    const trajectoryMarkers = createTrajectoryPoints(
+      trajectoryPoints,
+      ColorCode("cyan", 1.0),
+      pointSize,
+    );
+
+    sceneEntities.push({
+      timestamp: time,
+      frame_id: OSI_GLOBAL_FRAME,
+      id: "motion_request_desired_trajectory",
+      lifetime: { sec: 0, nsec: 100_000_000 }, // 0.1 seconds - smooth transition
+      frame_locked: true,
+      lines: [trajectoryLine],
+      spheres: trajectoryMarkers,
+    });
+  }
+
+  return sceneEntities;
+}
+
+/**
  * Hashing function to create a unique hash for lane objects.
  *
  * The hashLanes function creates a hash by:
@@ -1077,6 +1184,30 @@ export function activate(extensionContext: ExtensionContext): void {
     };
   };
 
+  const convertMotionRequestToSceneUpdate = (
+    osiMotionRequest: MotionRequest,
+    event?: Immutable<MessageEvent<MotionRequest>>,
+  ): DeepPartial<SceneUpdate> => {
+    let sceneEntities: PartialSceneEntity[] = [];
+    const config = event?.topicConfig as Config | undefined;
+
+    try {
+      sceneEntities = buildMotionRequestSceneEntities(
+        osiMotionRequest as DeepRequired<MotionRequest>,
+        config,
+      );
+    } catch (error) {
+      console.error(
+        "OsiMotionRequestVisualizer: Error during message conversion:\n%s\nSkipping message! (Input message not compatible?)",
+        error,
+      );
+    }
+    return {
+      deletions: [],
+      entities: sceneEntities,
+    };
+  };
+
   const convertGroundTruthToFrameTransforms = (message: GroundTruth): FrameTransforms => {
     const transforms = { transforms: [] } as FrameTransforms;
 
@@ -1218,6 +1349,7 @@ export function activate(extensionContext: ExtensionContext): void {
           showBoundingBox: true,
           show3dModels: false,
           defaultModelPath: "/opt/models/vehicles/",
+          trajectoryPointSize: 0.15,
         },
       }),
     },
@@ -1227,6 +1359,47 @@ export function activate(extensionContext: ExtensionContext): void {
     fromSchemaName: "osi3.SensorData",
     toSchemaName: "foxglove.SceneUpdate",
     converter: convertSensorDataToSceneUpdate,
+  });
+
+  extensionContext.registerMessageConverter({
+    fromSchemaName: "osi3.MotionRequest",
+    toSchemaName: "foxglove.SceneUpdate",
+    converter: convertMotionRequestToSceneUpdate,
+    panelSettings: {
+      "3D": generatePanelSettings({
+        settings: (config) => ({
+          fields: {
+            trajectoryPointSize: {
+              label: "Trajectory Point Size (meters)",
+              input: "number",
+              value: config?.trajectoryPointSize ?? 0.15,
+              min: 0.05,
+              max: 2.0,
+              step: 0.05,
+              help: "Size of the spheres marking trajectory waypoints",
+            },
+          },
+        }),
+        handler: (action, config: Config | undefined) => {
+          if (config == undefined) {
+            return;
+          }
+          if (action.action === "update" && action.payload.path[2] === "trajectoryPointSize") {
+            config.trajectoryPointSize = action.payload.value as number;
+          }
+        },
+        defaultConfig: {
+          caching: true,
+          showAxes: true,
+          showPhysicalLanes: true,
+          showLogicalLanes: false,
+          showBoundingBox: true,
+          show3dModels: false,
+          defaultModelPath: "/opt/models/vehicles/",
+          trajectoryPointSize: 0.15,
+        },
+      }),
+    },
   });
 
   extensionContext.registerMessageConverter({
