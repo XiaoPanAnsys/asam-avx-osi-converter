@@ -5,7 +5,6 @@ import {
   SceneEntityDeletionType,
   SceneUpdate,
   SpherePrimitive,
-  TextPrimitive,
   Vector3,
   type Color,
   type FrameTransform,
@@ -15,11 +14,10 @@ import {
   type Point3,
 } from "@foxglove/schemas";
 import { Time } from "@foxglove/schemas/schemas/typescript/Time";
+import type { DetectedMovingObject, DetectedStationaryObject } from "@lichtblick/asam-osi-types";
 import {
-  DetectedLaneBoundary,
   GroundTruth,
   LaneBoundary,
-  LaneBoundary_BoundaryPoint,
   MotionRequest,
   MovingObject,
   MovingObject_Type,
@@ -93,6 +91,14 @@ const PREFIX_STATIONARY_OBJECT = "stationary_object";
 const PREFIX_TRAFFIC_SIGN = "traffic_sign";
 const PREFIX_TRAFFIC_LIGHT = "traffic_light";
 const PREFIX_ROAD_MARKING = "road_marking";
+
+// Prefixes for detected objects from SensorData
+const PREFIX_DETECTED_MOVING_OBJECT = "detected_moving_object";
+const PREFIX_DETECTED_STATIONARY_OBJECT = "detected_stationary_object";
+const PREFIX_DETECTED_TRAFFIC_SIGN = "detected_traffic_sign";
+const PREFIX_DETECTED_TRAFFIC_LIGHT = "detected_traffic_light";
+const PREFIX_DETECTED_ROAD_MARKING = "detected_road_marking";
+const PREFIX_DETECTED_LANE_BOUNDARY = "detected_lane_boundary";
 
 type Config = {
   caching: boolean;
@@ -723,65 +729,372 @@ export function buildEgoVehicleRearAxleFrameTransform(
   };
 }
 
+/**
+ * Transform a position from sensor frame to vehicle frame using mounting position
+ */
+function transformSensorToVehicleFrame(
+  sensorPosition: { x: number; y: number; z: number },
+  mountingPosition: {
+    position: { x: number; y: number; z: number };
+    orientation: { roll: number; pitch: number; yaw: number };
+  },
+): { x: number; y: number; z: number } {
+  const { x: sx, y: sy, z: sz } = sensorPosition;
+  const { position: mp, orientation: mo } = mountingPosition;
+
+  // Apply rotation (yaw, pitch, roll) - simplified for yaw only (most common case)
+  const cosYaw = Math.cos(mo.yaw);
+  const sinYaw = Math.sin(mo.yaw);
+
+  // Rotate point around Z-axis (yaw)
+  const rotatedX = sx * cosYaw - sy * sinYaw;
+  const rotatedY = sx * sinYaw + sy * cosYaw;
+  const rotatedZ = sz; // Simplified: ignoring pitch/roll for now
+
+  // Translate to vehicle frame
+  return {
+    x: rotatedX + mp.x,
+    y: rotatedY + mp.y,
+    z: rotatedZ + mp.z,
+  };
+}
+
+/**
+ * Builds scene entities for SensorData, visualizing all detected objects
+ * similar to GroundTruth visualization.
+ *
+ * @param osiSensorData - The OSI SensorData object containing detected objects
+ * @param config - Configuration options for visualization
+ * @param modelCache - Cache for 3D models
+ * @returns An array of PartialSceneEntity objects representing detected objects
+ */
 function buildSensorDataSceneEntities(
   osiSensorData: DeepRequired<SensorData>,
+  config: Config | undefined,
+  modelCache: Map<string, ModelPrimitive>,
 ): PartialSceneEntity[] {
-  const ToPoint3 = (boundary: DeepRequired<LaneBoundary_BoundaryPoint>): Point3 => {
-    return { x: boundary.position.x, y: boundary.position.y, z: 0 };
-  };
-  const ToLinePrimitive = (points: Point3[], thickness: number): DeepPartial<LinePrimitive> => {
-    return {
-      type: LineType.LINE_STRIP,
-      pose: {
-        position: { x: 0, y: 0, z: 0 },
-        orientation: { x: 0, y: 0, z: 0, w: -10 },
+  const time: Time = osiTimestampToTime(osiSensorData.timestamp);
+  const sceneEntities: PartialSceneEntity[] = [];
+
+  // Get sensor mounting position for coordinate transformation
+  const mountingPosition = osiSensorData.mounting_position;
+  const hasMountingPosition = mountingPosition && mountingPosition.position && mountingPosition.orientation;
+
+  // Log mounting position info for debugging
+  if (hasMountingPosition) {
+    console.log(
+      "[SensorData] Applying coordinate transformation from sensor frame to vehicle frame:",
+      {
+        mounting: {
+          position: mountingPosition.position,
+          orientation: mountingPosition.orientation,
+        },
       },
-      thickness,
-      scale_invariant: true,
-      points,
-      color: ColorCode("green", 1),
-      indices: [],
-    };
-  };
+    );
+  } else {
+    console.warn(
+      "[SensorData] No mounting_position found - detected objects will be in sensor's local frame",
+    );
+  }
 
-  const makeLinePrimitive = (
-    lane_boundary: DeepRequired<DetectedLaneBoundary>,
-    thickness: number,
-  ): DeepPartial<LinePrimitive> => {
-    return ToLinePrimitive(lane_boundary.boundary_line.map(ToPoint3), thickness);
-  };
+  // Helper function to convert DetectedMovingObject to MovingObject-like structure
+  // DetectedMovingObject has similar structure but with additional detection metadata
+  const buildDetectedMovingObjectEntity = (
+    detectedObj: DeepRequired<DetectedMovingObject>,
+  ): PartialSceneEntity => {
+    // DetectedMovingObject structure: base + candidate
+    // Need to combine them to create a MovingObject-like structure
+    const mainCandidate = detectedObj.candidate[0];
+    if (!mainCandidate || !detectedObj.base) {
+      throw new Error("Missing candidate or base data");
+    }
 
-  const makePrimitiveLines = (
-    lane_boundary: DeepRequired<DetectedLaneBoundary>[],
-    thickness: number,
-  ): DeepPartial<LinePrimitive>[] => {
-    return lane_boundary.map((b) => makeLinePrimitive(b, thickness));
-  };
+    // Transform position from sensor frame to vehicle/global frame if mounting position available
+    let transformedBase = detectedObj.base;
+    if (hasMountingPosition && detectedObj.base.position) {
+      const transformedPos = transformSensorToVehicleFrame(
+        detectedObj.base.position,
+        mountingPosition as any,
+      );
+      transformedBase = {
+        ...detectedObj.base,
+        position: transformedPos,
+      };
+    }
 
-  const makeInfoText = (): DeepPartial<TextPrimitive> => {
-    return {
-      pose: {
-        position: { x: 0, y: 0, z: 0 },
-        orientation: { x: 0, y: 0, z: 0, w: -10 },
+    // Construct a MovingObject-like structure from detected data
+    const baseObj = {
+      id: detectedObj.header?.ground_truth_id?.[0] ?? { value: BigInt(Date.now()) },
+      base: transformedBase,
+      type: mainCandidate.type ?? 0,
+      vehicle_classification: mainCandidate.vehicle_classification ?? {},
+      vehicle_attributes: {},
+      model_reference: "",
+    } as unknown as DeepRequired<MovingObject>;
+
+    // Create metadata including detection confidence
+    const metadata: KeyValuePair[] = [
+      {
+        key: "type",
+        value: MovingObject_Type[mainCandidate.type ?? 0] ?? "UNKNOWN",
       },
-      billboard: true,
-      font_size: 30,
-      scale_invariant: true,
-      color: ColorCode("green", 1),
-      text: "SensorData not supported yet",
-    };
+      {
+        key: "detection_confidence",
+        value: (mainCandidate.probability ?? 0).toFixed(2),
+      },
+      {
+        key: "existence_probability",
+        value: (detectedObj.header?.existence_probability ?? 0).toFixed(2),
+      },
+    ];
+
+    // Use cyan color to distinguish detected objects from ground truth
+    const objectColor = ColorCode("cyan", 0.7);
+
+    return buildObjectEntity(
+      baseObj,
+      objectColor,
+      PREFIX_DETECTED_MOVING_OBJECT,
+      OSI_GLOBAL_FRAME,
+      time,
+      config,
+      modelCache,
+      metadata,
+    );
   };
 
-  const road_output_scene_update: PartialSceneEntity = {
-    timestamp: { sec: osiSensorData.timestamp.seconds, nsec: osiSensorData.timestamp.nanos },
-    frame_id: OSI_EGO_VEHICLE_REAR_AXLE_FRAME,
-    id: OSI_GLOBAL_FRAME,
-    lifetime: { sec: 0, nsec: 0 },
-    frame_locked: true,
-    lines: makePrimitiveLines(osiSensorData.lane_boundary, 1.0),
-    texts: [makeInfoText()],
+  // Helper function for DetectedStationaryObject
+  const buildDetectedStationaryObjectEntity = (
+    detectedObj: DeepRequired<DetectedStationaryObject>,
+  ): PartialSceneEntity => {
+    // DetectedStationaryObject structure: base + candidate
+    const mainCandidate = detectedObj.candidate[0];
+    if (!mainCandidate || !detectedObj.base) {
+      throw new Error("Missing candidate or base data");
+    }
+
+    // Transform position from sensor frame to vehicle/global frame if mounting position available
+    let transformedBase = detectedObj.base;
+    if (hasMountingPosition && detectedObj.base.position) {
+      const transformedPos = transformSensorToVehicleFrame(
+        detectedObj.base.position,
+        mountingPosition as any,
+      );
+      transformedBase = {
+        ...detectedObj.base,
+        position: transformedPos,
+      };
+    }
+
+    // Construct a StationaryObject-like structure from detected data
+    const baseObj = {
+      id: detectedObj.header?.ground_truth_id?.[0] ?? { value: BigInt(Date.now()) },
+      base: transformedBase,
+      classification: mainCandidate.classification ?? { type: 0, color: 0 },
+      model_reference: "",
+    } as unknown as DeepRequired<StationaryObject>;
+
+    const metadata: KeyValuePair[] = [
+      {
+        key: "type",
+        value: mainCandidate.classification?.type?.toString() ?? "unknown",
+      },
+      {
+        key: "detection_confidence",
+        value: (mainCandidate.probability ?? 0).toFixed(2),
+      },
+      {
+        key: "existence_probability",
+        value: (detectedObj.header?.existence_probability ?? 0).toFixed(2),
+      },
+    ];
+
+    // Use yellow color for detected stationary objects
+    const objectColor = ColorCode("yellow", 0.7);
+
+    return buildObjectEntity(
+      baseObj,
+      objectColor,
+      PREFIX_DETECTED_STATIONARY_OBJECT,
+      OSI_GLOBAL_FRAME,
+      time,
+      config,
+      modelCache,
+      metadata,
+    );
   };
-  return [road_output_scene_update];
+
+  // Detected Moving Objects
+  if (osiSensorData.moving_object && osiSensorData.moving_object.length > 0) {
+    const detectedMovingObjects = osiSensorData.moving_object
+      .map((obj) => {
+        try {
+          return buildDetectedMovingObjectEntity(obj);
+        } catch (error) {
+          console.warn("Failed to build detected moving object entity:", error);
+          return null;
+        }
+      })
+      .filter((entity): entity is PartialSceneEntity => entity !== null);
+    sceneEntities.push(...detectedMovingObjects);
+  }
+
+  // Detected Stationary Objects
+  if (osiSensorData.stationary_object && osiSensorData.stationary_object.length > 0) {
+    const detectedStationaryObjects = osiSensorData.stationary_object
+      .map((obj) => {
+        try {
+          return buildDetectedStationaryObjectEntity(obj);
+        } catch (error) {
+          console.warn("Failed to build detected stationary object entity:", error);
+          return null;
+        }
+      })
+      .filter((entity): entity is PartialSceneEntity => entity !== null);
+    sceneEntities.push(...detectedStationaryObjects);
+  }
+
+  // Detected Traffic Signs
+  if (osiSensorData.traffic_sign && osiSensorData.traffic_sign.length > 0) {
+    const detectedTrafficSigns = osiSensorData.traffic_sign
+      .map((detectedSign) => {
+        try {
+          // DetectedTrafficSign structure: use the most likely classification candidate
+          const mainCandidate = detectedSign.main_sign.candidate[0];
+          if (!mainCandidate || !detectedSign.main_sign.base) {
+            return null;
+          }
+
+          // Build a TrafficSign-like structure from detected sign
+          const baseSign = {
+            id: detectedSign.header?.ground_truth_id?.[0] ?? { value: 0n },
+            main_sign: {
+              base: detectedSign.main_sign.base,
+              classification: mainCandidate.classification,
+              model_reference: "",
+            },
+            supplementary_sign: detectedSign.supplementary_sign?.map((suppSign) => ({
+              base: suppSign.base,
+              classification: suppSign.candidate[0]?.classification ?? {},
+              model_reference: "",
+            })) ?? [],
+            source_reference: {},
+          } as unknown as DeepRequired<TrafficSign>;
+
+          return buildTrafficSignEntity(
+            baseSign,
+            PREFIX_DETECTED_TRAFFIC_SIGN,
+            OSI_GLOBAL_FRAME,
+            time,
+          );
+        } catch (error) {
+          console.warn("Failed to build detected traffic sign entity:", error);
+          return null;
+        }
+      })
+      .filter((entity): entity is PartialSceneEntity => entity !== null);
+    sceneEntities.push(...detectedTrafficSigns);
+  }
+
+  // Detected Traffic Lights
+  if (osiSensorData.traffic_light && osiSensorData.traffic_light.length > 0) {
+    const detectedTrafficLights = osiSensorData.traffic_light
+      .map((detectedLight) => {
+        try {
+          const baseLight = detectedLight.base as unknown as DeepRequired<TrafficLight>;
+          const metadata = buildTrafficLightMetadata(baseLight);
+          return buildTrafficLightEntity(
+            baseLight,
+            PREFIX_DETECTED_TRAFFIC_LIGHT,
+            OSI_GLOBAL_FRAME,
+            time,
+            metadata,
+          );
+        } catch (error) {
+          console.warn("Failed to build detected traffic light entity:", error);
+          return null;
+        }
+      })
+      .filter((entity): entity is PartialSceneEntity => entity !== null);
+    sceneEntities.push(...detectedTrafficLights);
+  }
+
+  // Detected Road Markings
+  if (osiSensorData.road_marking && osiSensorData.road_marking.length > 0) {
+    const detectedRoadMarkings = osiSensorData.road_marking
+      .flatMap((detectedMarking) => {
+        try {
+          const baseMarking = detectedMarking.base as unknown as DeepRequired<RoadMarking>;
+          const result = buildRoadMarkingEntity(baseMarking, OSI_GLOBAL_FRAME, time);
+          if (result != undefined) {
+            // Update the ID prefix for detected markings
+            result.id = result.id.replace(PREFIX_ROAD_MARKING, PREFIX_DETECTED_ROAD_MARKING);
+            return result;
+          }
+          return [];
+        } catch (error) {
+          console.warn("Failed to build detected road marking entity:", error);
+          return [];
+        }
+      });
+    sceneEntities.push(...detectedRoadMarkings);
+  }
+
+  // Detected Lane Boundaries (improved from previous implementation)
+  if (
+    config?.showPhysicalLanes !== false &&
+    osiSensorData.lane_boundary &&
+    osiSensorData.lane_boundary.length > 0
+  ) {
+    const detectedLaneBoundaries = osiSensorData.lane_boundary
+      .map((detectedBoundary) => {
+        try {
+          // Convert DetectedLaneBoundary to LaneBoundary structure
+          const baseBoundary: DeepRequired<LaneBoundary> = {
+            id: detectedBoundary.header?.ground_truth_id?.[0] ?? { value: 0n },
+            boundary_line: detectedBoundary.boundary_line.map((point) => {
+              // Transform position from sensor frame to vehicle frame if mounting position available
+              let transformedPos = {
+                x: point.position.x,
+                y: point.position.y,
+                z: point.position.z,
+              };
+
+              if (hasMountingPosition && point.position) {
+                transformedPos = transformSensorToVehicleFrame(
+                  point.position,
+                  mountingPosition as any,
+                );
+              }
+
+    return {
+                position: transformedPos,
+                width: point.width,
+                height: point.height,
+                dash: point.dash,
+              };
+            }),
+            classification: detectedBoundary.candidate?.[0]?.classification ?? {
+              type: 0,
+              color: 0,
+              limiting_structure_id: [],
+            },
+          } as DeepRequired<LaneBoundary>;
+
+          const entity = buildLaneBoundaryEntity(baseBoundary, OSI_GLOBAL_FRAME, time);
+          // Update ID prefix for detected lane boundaries
+          entity.id = entity.id.replace(PREFIX_LANE_BOUNDARY, PREFIX_DETECTED_LANE_BOUNDARY);
+          return entity;
+        } catch (error) {
+          console.warn("Failed to build detected lane boundary entity:", error);
+          return null;
+        }
+      })
+      .filter((entity): entity is PartialSceneEntity => entity !== null);
+    sceneEntities.push(...detectedLaneBoundaries);
+  }
+
+  return sceneEntities;
 }
 
 /**
@@ -878,7 +1191,7 @@ function buildMotionRequestSceneEntities(
       frame_id: OSI_GLOBAL_FRAME,
       id: "motion_request_desired_trajectory",
       lifetime: { sec: 0, nsec: 100_000_000 }, // 0.1 seconds - smooth transition
-      frame_locked: true,
+    frame_locked: true,
       lines: [trajectoryLine],
       spheres: trajectoryMarkers,
     });
@@ -1167,11 +1480,19 @@ export function activate(extensionContext: ExtensionContext): void {
     };
   };
 
-  const convertSensorDataToSceneUpdate = (osiSensorData: SensorData): DeepPartial<SceneUpdate> => {
+  const convertSensorDataToSceneUpdate = (
+    osiSensorData: SensorData,
+    event?: Immutable<MessageEvent<SensorData>>,
+  ): DeepPartial<SceneUpdate> => {
     let sceneEntities: PartialSceneEntity[] = [];
+    const config = event?.topicConfig as Config | undefined;
 
     try {
-      sceneEntities = buildSensorDataSceneEntities(osiSensorData as DeepRequired<SensorData>);
+      sceneEntities = buildSensorDataSceneEntities(
+        osiSensorData as DeepRequired<SensorData>,
+        config,
+        modelCache,
+      );
     } catch (error) {
       console.error(
         "OsiSensorDataVisualizer: Error during message conversion:\n%s\nSkipping message! (Input message not compatible?)",
@@ -1359,6 +1680,80 @@ export function activate(extensionContext: ExtensionContext): void {
     fromSchemaName: "osi3.SensorData",
     toSchemaName: "foxglove.SceneUpdate",
     converter: convertSensorDataToSceneUpdate,
+    panelSettings: {
+      "3D": generatePanelSettings({
+        settings: (config) => ({
+          fields: {
+            caching: {
+              label: "Enable caching",
+              input: "boolean",
+              value: config?.caching ?? true,
+            },
+            showAxes: {
+              label: "Show axes",
+              input: "boolean",
+              value: config?.showAxes ?? true,
+            },
+            showPhysicalLanes: {
+              label: "Show detected lane boundaries",
+              input: "boolean",
+              value: config?.showPhysicalLanes ?? true,
+              help: "Display detected lane boundaries from sensor data",
+            },
+            showBoundingBox: {
+              label: "Show bounding boxes",
+              input: "boolean",
+              value: config?.showBoundingBox ?? true,
+              help: "Display bounding boxes for detected objects",
+            },
+            show3dModels: {
+              label: "Show 3D models",
+              input: "boolean",
+              value: config?.show3dModels ?? false,
+            },
+            defaultModelPath: {
+              label: "Default model path",
+              input: "string",
+              value: config?.defaultModelPath ?? "/opt/models/vehicles/",
+              items: [],
+            },
+          },
+        }),
+        handler: (action, config: Config | undefined) => {
+          if (config == undefined) {
+            return;
+          }
+          if (action.action === "update" && action.payload.path[2] === "caching") {
+            config.caching = action.payload.value as boolean;
+          }
+          if (action.action === "update" && action.payload.path[2] === "showAxes") {
+            config.showAxes = action.payload.value as boolean;
+          }
+          if (action.action === "update" && action.payload.path[2] === "showPhysicalLanes") {
+            config.showPhysicalLanes = action.payload.value as boolean;
+          }
+          if (action.action === "update" && action.payload.path[2] === "showBoundingBox") {
+            config.showBoundingBox = action.payload.value as boolean;
+          }
+          if (action.action === "update" && action.payload.path[2] === "show3dModels") {
+            config.show3dModels = action.payload.value as boolean;
+          }
+          if (action.action === "update" && action.payload.path[2] === "defaultModelPath") {
+            config.defaultModelPath = action.payload.value as string;
+          }
+        },
+        defaultConfig: {
+          caching: true,
+          showAxes: true,
+          showPhysicalLanes: true,
+          showLogicalLanes: false,
+          showBoundingBox: true,
+          show3dModels: false,
+          defaultModelPath: "/opt/models/vehicles/",
+          trajectoryPointSize: 0.15,
+        },
+      }),
+    },
   });
 
   extensionContext.registerMessageConverter({
