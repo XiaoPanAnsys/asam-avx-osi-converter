@@ -855,7 +855,7 @@ function buildSensorDataSceneEntities(
       baseObj,
       objectColor,
       PREFIX_DETECTED_MOVING_OBJECT,
-      OSI_GLOBAL_FRAME,
+      OSI_EGO_VEHICLE_REAR_AXLE_FRAME,
       time,
       config,
       modelCache,
@@ -916,7 +916,7 @@ function buildSensorDataSceneEntities(
       baseObj,
       objectColor,
       PREFIX_DETECTED_STATIONARY_OBJECT,
-      OSI_GLOBAL_FRAME,
+      OSI_EGO_VEHICLE_REAR_AXLE_FRAME,
       time,
       config,
       modelCache,
@@ -984,7 +984,7 @@ function buildSensorDataSceneEntities(
           return buildTrafficSignEntity(
             baseSign,
             PREFIX_DETECTED_TRAFFIC_SIGN,
-            OSI_GLOBAL_FRAME,
+            OSI_EGO_VEHICLE_REAR_AXLE_FRAME,
             time,
           );
         } catch (error) {
@@ -1006,7 +1006,7 @@ function buildSensorDataSceneEntities(
           return buildTrafficLightEntity(
             baseLight,
             PREFIX_DETECTED_TRAFFIC_LIGHT,
-            OSI_GLOBAL_FRAME,
+            OSI_EGO_VEHICLE_REAR_AXLE_FRAME,
             time,
             metadata,
           );
@@ -1025,7 +1025,7 @@ function buildSensorDataSceneEntities(
       .flatMap((detectedMarking) => {
         try {
           const baseMarking = detectedMarking.base as unknown as DeepRequired<RoadMarking>;
-          const result = buildRoadMarkingEntity(baseMarking, OSI_GLOBAL_FRAME, time);
+          const result = buildRoadMarkingEntity(baseMarking, OSI_EGO_VEHICLE_REAR_AXLE_FRAME, time);
           if (result != undefined) {
             // Update the ID prefix for detected markings
             result.id = result.id.replace(PREFIX_ROAD_MARKING, PREFIX_DETECTED_ROAD_MARKING);
@@ -1081,7 +1081,7 @@ function buildSensorDataSceneEntities(
             },
           } as DeepRequired<LaneBoundary>;
 
-          const entity = buildLaneBoundaryEntity(baseBoundary, OSI_GLOBAL_FRAME, time);
+          const entity = buildLaneBoundaryEntity(baseBoundary, OSI_EGO_VEHICLE_REAR_AXLE_FRAME, time);
           // Update ID prefix for detected lane boundaries
           entity.id = entity.id.replace(PREFIX_LANE_BOUNDARY, PREFIX_DETECTED_LANE_BOUNDARY);
           return entity;
